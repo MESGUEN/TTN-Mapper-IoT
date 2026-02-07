@@ -13,10 +13,11 @@ static const int LORA_TX_PIN = 5;  // ESP32 TX -> LoRa RX
 static const int LED_PIN     = 8;  // NeoPixel DevKitM-1
 
 // ====== LoRaWAN ======
-static const char* APPKEY = "5E4EDBD5CC029427681B0F38E0C80B51";  // <-- ton APPKEY
+static const char* APPKEY = "votre_clé_symétrique";  // <-- ton APPKEY
 static const uint32_t JOIN_TIMEOUT_MS = 15000;
 static const uint32_t AT_TIMEOUT_MS   = 2000;
 static const uint32_t TX_TIMEOUT_MS   = 10000;
+static const uint32_t JOIN_INTERVAL_MS   = 30000;
 static const uint32_t SEND_INTERVAL_MS = 60000;
 
 // ====== Serial ======
@@ -26,11 +27,18 @@ SoftwareSerial GPS(GPS_RX_PIN, GPS_TX_PIN); // GPS en SoftwareSerial
 // ====== LED simple ======
 Adafruit_NeoPixel pixel(1, LED_PIN, NEO_GRB + NEO_KHZ800);
 static void ledOff()   { pixel.setPixelColor(0, pixel.Color(0,0,0));  pixel.show(); }
-static void ledGreen() { pixel.setPixelColor(0, pixel.Color(0,25,0)); pixel.show(); }
-static void ledRed()   { pixel.setPixelColor(0, pixel.Color(25,0,0)); pixel.show(); }
+static void ledGreen() { pixel.setPixelColor(0, pixel.Color(0,50,0)); pixel.show(); }
+static void ledRed()   { pixel.setPixelColor(0, pixel.Color(50,0,0)); pixel.show(); }
+static void ledBlue()   { pixel.setPixelColor(0, pixel.Color(0,0,255)); pixel.show(); }
+
+
 
 // ====== Cayenne LPP GPS payload (11 octets) ======
 uint8_t LPP_GPS[11] = {0};
+
+//====== machine d'états ======
+int state = 1;
+uint32_t lastSend = 0;
 
 // --- signed 24-bit big endian ---
 static void s24be(int32_t n, uint8_t out[3]) {
@@ -196,9 +204,6 @@ static void fatal(const char* why) {
   while (true) delay(1000);
 }
 
-int state = 1;
-uint32_t lastSend = 0;
-
 static void config_lora() {
   ledOff();
   Serial.println("AT+FDEFAULT");
@@ -236,7 +241,8 @@ static void join_lora() {
       return;
     }
     if (res == "TIMEOUT") fatal("JOIN TIMEOUT");
-    delay(30000);
+    Serial.println("Nouvelle tentative dans 30s");
+    delay(JOIN_INTERVAL_MS);
   }
   fatal("JOIN impossible apres 10 essais");
 }
@@ -248,12 +254,12 @@ static void send_payload() {
   String ret = lora_send_hex(payload);
   Serial.println("TX RET: " + ret);
 
-  if (ret == "DONE") { state = 3; return; }
   if (ret == "NOT_JOINED") { state = 1; return; }
   if (ret == "TIMEOUT") fatal("TX TIMEOUT");
-
-  delay(30000);
-  state = 3;
+  ledBlue();
+  delay(500);
+  ledGreen();
+  
 }
 
 void setup() {
@@ -272,6 +278,7 @@ void setup() {
 
   delay(1000);
   Serial.println("Boot OK");
+
 }
 
 void loop() {
@@ -280,16 +287,17 @@ void loop() {
     case 2: join_lora();   break;
 
     case 3:
-      if (gps_update_lpp(1)) {
-        uint32_t now = millis();
-        if (now - lastSend > SEND_INTERVAL_MS) {
-          lastSend = now;
-          state = 4;
-        }
-      }
+      if (gps_update_lpp(1)) state = 4;
       break;
 
-    case 4: send_payload(); break;
+    case 4:
+      if (millis() - lastSend > SEND_INTERVAL_MS) {
+        send_payload();
+        lastSend = millis();
+        Serial.println("Prochain Uplink dans 60s");
+        state = 3;
+      }
+      break;
 
     default: fatal("Etat inconnu");
   }
